@@ -68,6 +68,7 @@
     "replica.ts",
     "pool.ts",
     "pool_operator.ts",
+    "pv_operator.ts",
     "volume.ts",
     "volumes.ts",
     "volume_operator.ts",

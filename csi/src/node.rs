@@ -22,12 +22,7 @@ use crate::{
         *,
     },
     dev::Device,
-    filesystem_vol::{
-        publish_fs_volume,
-        stage_fs_volume,
-        unpublish_fs_volume,
-        unstage_fs_volume,
-    },
+    filesystem_vol::{publish_fs_volume, unpublish_fs_volume},
 };
 
 #[derive(Clone, Debug)]
@@ -128,6 +123,7 @@ async fn detach(uuid: &Uuid, errheader: String) -> Result<(), Status> {
 }
 
 impl Node {}
+
 #[tonic::async_trait]
 impl node_server::Node for Node {
     async fn node_get_info(
@@ -156,174 +152,12 @@ impl node_server::Node for Node {
         &self,
         _request: Request<NodeGetCapabilitiesRequest>,
     ) -> Result<Response<NodeGetCapabilitiesResponse>, Status> {
-        let caps = vec![node_service_capability::rpc::Type::StageUnstageVolume];
-
-        debug!("NodeGetCapabilities request: {:?}", caps);
+        debug!("NodeGetCapabilities request");
 
         // We don't support stage/unstage and expand volume rpcs
         Ok(Response::new(NodeGetCapabilitiesResponse {
-            capabilities: caps
-                .into_iter()
-                .map(|c| NodeServiceCapability {
-                    r#type: Some(node_service_capability::Type::Rpc(
-                        node_service_capability::Rpc {
-                            r#type: c as i32,
-                        },
-                    )),
-                })
-                .collect(),
+            capabilities: Vec::new(),
         }))
-    }
-
-    /// This RPC is called by the CO when a workload that wants to use the
-    /// specified volume is placed (scheduled) on a node. The Plugin SHALL
-    /// assume that this RPC will be executed on the node where the volume will
-    /// be used. If the corresponding Controller Plugin has
-    /// PUBLISH_UNPUBLISH_VOLUME controller capability, the CO MUST guarantee
-    /// that this RPC is called after ControllerPublishVolume is called for the
-    /// given volume on the given node and returns a success. This operation
-    /// MUST be idempotent. If the volume corresponding to the volume_id has
-    /// already been published at the specified target_path, and is compatible
-    /// with the specified volume_capability and readonly flag, the Plugin MUST
-    /// reply 0 OK. If this RPC failed, or the CO does not know if it failed or
-    /// not, it MAY choose to call NodePublishVolume again, or choose to call
-    /// NodeUnpublishVolume. This RPC MAY be called by the CO multiple times on
-    /// the same node for the same volume with possibly different target_path
-    /// and/or other arguments if the volume has MULTI_NODE capability (i.e.,
-    /// access_mode is either MULTI_NODE_READER_ONLY, MULTI_NODE_SINGLE_WRITER
-    /// or MULTI_NODE_MULTI_WRITER).
-    async fn node_publish_volume(
-        &self,
-        request: Request<NodePublishVolumeRequest>,
-    ) -> Result<Response<NodePublishVolumeResponse>, Status> {
-        let msg = request.into_inner();
-
-        trace!("node_publish_volume {:?}", msg);
-
-        if msg.volume_id.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to publish volume: missing volume id"
-            ));
-        }
-
-        if msg.target_path.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to publish volume {}: missing target path",
-                &msg.volume_id
-            ));
-        }
-
-        if let Err(error) =
-            check_access_mode(&msg.volume_capability, msg.readonly)
-        {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to publish volume {}: {}",
-                &msg.volume_id,
-                error
-            ));
-        }
-
-        // Note that the staging path is NOT optional,
-        // as we advertise StageUnstageVolume.
-        if msg.staging_target_path.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to publish volume {}: missing staging path",
-                &msg.volume_id
-            ));
-        }
-
-        // The CO must ensure that the parent of target path exists,
-        // make sure that it exists.
-        let target_parent = Path::new(&msg.target_path).parent().unwrap();
-        if !target_parent.exists() || !target_parent.is_dir() {
-            return Err(Status::new(
-                Code::Internal,
-                format!(
-                    "Failed to find parent dir for mountpoint {}, volume {}",
-                    &msg.target_path, &msg.volume_id
-                ),
-            ));
-        }
-
-        match get_access_type(&msg.volume_capability).map_err(|error| {
-            failure!(
-                Code::InvalidArgument,
-                "Failed to publish volume {}: {}",
-                &msg.volume_id,
-                error
-            )
-        })? {
-            AccessType::Mount(mnt) => {
-                publish_fs_volume(&msg, mnt, &self.filesystems)?;
-            }
-            AccessType::Block(_) => {
-                publish_block_volume(&msg).await?;
-            }
-        }
-        Ok(Response::new(NodePublishVolumeResponse {}))
-    }
-
-    /// This RPC is called by the CO when a workload using the specified
-    /// volume is removed (unscheduled) from a node.
-    /// If the corresponding Controller Plugin has PUBLISH_UNPUBLISH_VOLUME
-    /// controller capability, the CO MUST guarantee that this RPC is called
-    /// after ControllerPublishVolume is called for the given volume on the
-    /// given node and returns a success.
-    ///
-    /// This operation MUST be idempotent.
-    async fn node_unpublish_volume(
-        &self,
-        request: Request<NodeUnpublishVolumeRequest>,
-    ) -> Result<Response<NodeUnpublishVolumeResponse>, Status> {
-        let msg = request.into_inner();
-
-        trace!("node_unpublish_volume {:?}", msg);
-
-        if msg.volume_id.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to unpublish volume: missing volume id"
-            ));
-        }
-
-        if msg.target_path.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to unpublish volume {}: missing target path",
-                msg.volume_id
-            ));
-        }
-
-        // target path will have been created previously in node_publish_volume
-        // and is one of
-        //  1. a directory for filesystem volumes ,
-        //  2. a block special file for block volumes.
-        //
-        // If it does not exist, then a previously unpublish request has
-        // succeeded.
-        let target_path = Path::new(&msg.target_path);
-        if target_path.exists() {
-            if target_path.is_dir() {
-                unpublish_fs_volume(&msg)?;
-            } else {
-                if target_path.is_file() {
-                    return Err(Status::new(
-                        Code::Unknown,
-                        format!(
-                            "Failed to unpublish volume {}: {} is a file.",
-                            &msg.volume_id, &msg.target_path
-                        ),
-                    ));
-                }
-
-                unpublish_block_volume(&msg)?;
-            }
-        }
-        Ok(Response::new(NodeUnpublishVolumeResponse {}))
     }
 
     /// Get volume stats method is currently not implemented,
@@ -366,32 +200,59 @@ impl node_server::Node for Node {
         request: Request<NodeStageVolumeRequest>,
     ) -> Result<Response<NodeStageVolumeResponse>, Status> {
         let msg = request.into_inner();
+        error!("Unimplemented {:?}", msg);
+        Err(Status::new(Code::Unimplemented, "Method not implemented"))
+    }
 
-        trace!("node_stage_volume {:?}", msg);
+    async fn node_unstage_volume(
+        &self,
+        request: Request<NodeUnstageVolumeRequest>,
+    ) -> Result<Response<NodeUnstageVolumeResponse>, Status> {
+        let msg = request.into_inner();
+        error!("Unimplemented {:?}", msg);
+        Err(Status::new(Code::Unimplemented, "Method not implemented"))
+    }
+
+    /// This RPC is called by the CO when a workload that wants to use the
+    /// specified volume is placed (scheduled) on a node. The Plugin SHALL
+    /// assume that this RPC will be executed on the node where the volume will
+    /// be used. If the corresponding Controller Plugin has
+    /// PUBLISH_UNPUBLISH_VOLUME controller capability, the CO MUST guarantee
+    /// that this RPC is called after ControllerPublishVolume is called for the
+    /// given volume on the given node and returns a success. This operation
+    /// MUST be idempotent. If the volume corresponding to the volume_id has
+    /// already been published at the specified target_path, and is compatible
+    /// with the specified volume_capability and readonly flag, the Plugin MUST
+    /// reply 0 OK. If this RPC failed, or the CO does not know if it failed or
+    /// not, it MAY choose to call NodePublishVolume again, or choose to call
+    /// NodeUnpublishVolume. This RPC MAY be called by the CO multiple times on
+    /// the same node for the same volume with possibly different target_path
+    /// and/or other arguments if the volume has MULTI_NODE capability (i.e.,
+    /// access_mode is either MULTI_NODE_READER_ONLY, MULTI_NODE_SINGLE_WRITER
+    /// or MULTI_NODE_MULTI_WRITER).
+    async fn node_publish_volume(
+        &self,
+        request: Request<NodePublishVolumeRequest>,
+    ) -> Result<Response<NodePublishVolumeResponse>, Status> {
+        let msg = request.into_inner();
+
+        trace!("node_publish_volume {:?}", msg);
 
         if msg.volume_id.is_empty() {
             return Err(failure!(
                 Code::InvalidArgument,
-                "Failed to stage volume: missing volume id"
-            ));
-        }
-
-        if msg.staging_target_path.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to stage volume {}: missing staging path",
-                &msg.volume_id
+                "Failed to publish volume: missing volume id"
             ));
         }
 
         if let Err(error) = check_access_mode(
             &msg.volume_capability,
-            // relax the check a bit by pretending all stage mounts are ro
+            // relax the check a bit by pretending all publish mounts are ro
             true,
         ) {
             return Err(failure!(
                 Code::InvalidArgument,
-                "Failed to stage volume {}: {}",
+                "Failed to publish volume {}: {}",
                 &msg.volume_id,
                 error
             ));
@@ -402,7 +263,7 @@ impl node_server::Node for Node {
             Err(error) => {
                 return Err(failure!(
                     Code::InvalidArgument,
-                    "Failed to stage volume {}: {}",
+                    "Failed to publish volume {}: {}",
                     &msg.volume_id,
                     error
                 ));
@@ -412,7 +273,7 @@ impl node_server::Node for Node {
         let uri = &msg.publish_context.get("uri").ok_or_else(|| {
             failure!(
                 Code::InvalidArgument,
-                "Failed to stage volume {}: URI attribute missing from publish context",
+                "Failed to publish volume {}: URI attribute missing from publish context",
                 &msg.volume_id
             )
         })?;
@@ -420,14 +281,11 @@ impl node_server::Node for Node {
         let uuid = Uuid::parse_str(&msg.volume_id).map_err(|error| {
             failure!(
                 Code::Internal,
-                "Failed to stage volume {}: not a valid UUID: {}",
+                "Failed to publish volume {}: not a valid UUID: {}",
                 &msg.volume_id,
                 error
             )
         })?;
-
-        // Note checking existence of staging_target_path, is delegated to
-        // code handling those volume types where it is relevant.
 
         // All checks complete, now attach, if not attached already.
         debug!("Volume {} has URI {}", &msg.volume_id, uri);
@@ -435,7 +293,7 @@ impl node_server::Node for Node {
         let mut device = Device::parse(uri).map_err(|error| {
             failure!(
                 Code::Internal,
-                "Failed to stage volume {}: error parsing URI {}: {}",
+                "Failed to publish volume {}: error parsing URI {}: {}",
                 &msg.volume_id,
                 uri,
                 error
@@ -456,7 +314,7 @@ impl node_server::Node for Node {
         let device_path = match device.find().await.map_err(|error| {
             failure!(
             Code::Internal,
-            "Failed to stage volume {}: error locating device for URI {}: {}",
+            "Failed to publish volume {}: error locating device for URI {}: {}",
             &msg.volume_id,
             uri,
             error
@@ -470,7 +328,7 @@ impl node_server::Node for Node {
                 if let Err(error) = device.attach().await {
                     return Err(failure!(
                         Code::Internal,
-                        "Failed to stage volume {}: attach failed: {}",
+                        "Failed to publish volume {}: attach failed: {}",
                         &msg.volume_id,
                         error
                     ));
@@ -485,7 +343,7 @@ impl node_server::Node for Node {
                 .map_err(|error| {
                     failure!(
                         Code::Unavailable,
-                        "Failed to stage volume {}: {}",
+                        "Failed to publish volume {}: {}",
                         &msg.volume_id,
                         error
                     )
@@ -494,7 +352,7 @@ impl node_server::Node for Node {
                 device.fixup().await.map_err(|error| {
                     failure!(
                         Code::Internal,
-                        "Could not set parameters on staged device {}: {}",
+                        "Could not set parameters on publishd device {}: {}",
                         &msg.volume_id,
                         error
                     )
@@ -504,17 +362,35 @@ impl node_server::Node for Node {
             }
         };
 
-        // Attach successful, now stage mount if required.
+        // The CO must ensure that the parent of target path exists,
+        // make sure that it exists.
+        let target_parent = Path::new(&msg.target_path).parent().unwrap();
+        if !target_parent.exists() || !target_parent.is_dir() {
+            return Err(Status::new(
+                Code::Internal,
+                format!(
+                    "Failed to find parent dir for mountpoint {}, volume {}",
+                    &msg.target_path, &msg.volume_id
+                ),
+            ));
+        }
+
+        // Attach successful, now publish mount if required.
         match access_type {
             AccessType::Mount(mnt) => {
-                if let Err(fsmount_error) =
-                    stage_fs_volume(&msg, device_path, mnt, &self.filesystems)
-                        .await
+                if let Err(fsmount_error) = publish_fs_volume(
+                    &msg.volume_id,
+                    &msg.target_path,
+                    device_path,
+                    mnt,
+                    &self.filesystems,
+                )
+                .await
                 {
                     detach(
                         &uuid,
                         format!(
-                            "Failed to stage volume {}: {};",
+                            "Failed to publish volume {}: {};",
                             &msg.volume_id, fsmount_error
                         ),
                     )
@@ -523,50 +399,76 @@ impl node_server::Node for Node {
                 }
             }
             AccessType::Block(_) => {
-                // block volumes are not staged
+                publish_block_volume(
+                    &msg.volume_id,
+                    &msg.target_path,
+                    uri,
+                    msg.readonly,
+                )
+                .await?;
             }
         }
-        Ok(Response::new(NodeStageVolumeResponse {}))
+        Ok(Response::new(NodePublishVolumeResponse {}))
     }
 
-    async fn node_unstage_volume(
+    /// This RPC is called by the CO when a workload using the specified
+    /// volume is removed (unscheduled) from a node.
+    /// If the corresponding Controller Plugin has PUBLISH_UNPUBLISH_VOLUME
+    /// controller capability, the CO MUST guarantee that this RPC is called
+    /// after ControllerPublishVolume is called for the given volume on the
+    /// given node and returns a success.
+    ///
+    /// This operation MUST be idempotent.
+    async fn node_unpublish_volume(
         &self,
-        request: Request<NodeUnstageVolumeRequest>,
-    ) -> Result<Response<NodeUnstageVolumeResponse>, Status> {
+        request: Request<NodeUnpublishVolumeRequest>,
+    ) -> Result<Response<NodeUnpublishVolumeResponse>, Status> {
         let msg = request.into_inner();
 
         if msg.volume_id.is_empty() {
             return Err(failure!(
                 Code::InvalidArgument,
-                "Failed to unstage volume: missing volume id"
+                "Failed to unpublish volume: missing volume id"
             ));
         }
 
-        if msg.staging_target_path.is_empty() {
-            return Err(failure!(
-                Code::InvalidArgument,
-                "Failed to unstage volume {}: missing staging path",
-                &msg.volume_id
-            ));
-        }
-
-        debug!("Unstaging volume {}", &msg.volume_id);
+        debug!("Unpublishing volume {}", &msg.volume_id);
 
         let uuid = Uuid::parse_str(&msg.volume_id).map_err(|error| {
             failure!(
                 Code::Internal,
-                "Failed to unstage volume {}: not a valid UUID: {}",
+                "Failed to unpublish volume {}: not a valid UUID: {}",
                 &msg.volume_id,
                 error
             )
         })?;
 
-        // All checks complete, stage unmount if required.
+        // All checks complete, publish unmount if required.
+        // target path will have been created previously in node_publish_volume
+        // and is one of
+        //  1. a directory for filesystem volumes ,
+        //  2. a block special file for block volumes.
+        //
+        // If it does not exist, then a previously unpublish request has
+        // succeeded.
+        let target_path = Path::new(&msg.target_path);
+        if target_path.exists() {
+            if target_path.is_dir() {
+                unpublish_fs_volume(&msg.volume_id, &msg.target_path)?;
+            } else {
+                if target_path.is_file() {
+                    return Err(Status::new(
+                        Code::Unknown,
+                        format!(
+                            "Failed to unpublish volume {}: {} is a file.",
+                            &msg.volume_id, &msg.target_path
+                        ),
+                    ));
+                }
 
-        // unstage_fs_volume checks for mounted filesystems
-        // at the staging directory and umounts if any are
-        // found.
-        unstage_fs_volume(&msg).await?;
+                unpublish_block_volume(&msg.volume_id, &msg.target_path)?;
+            }
+        }
 
         // unmounts (if any) are complete.
         // If the device is attached, detach the device.
@@ -574,10 +476,10 @@ impl node_server::Node for Node {
         // this is correct, as the attach for nbd is a no-op.
         detach(
             &uuid,
-            format!("Failed to unstage volume {}:", &msg.volume_id),
+            format!("Failed to unpublish volume {}:", &msg.volume_id),
         )
         .await?;
-        info!("Volume {} unstaged", &msg.volume_id);
-        Ok(Response::new(NodeUnstageVolumeResponse {}))
+        info!("Volume {} unpublished", &msg.volume_id);
+        Ok(Response::new(NodeUnpublishVolumeResponse {}))
     }
 }

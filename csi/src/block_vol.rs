@@ -10,26 +10,17 @@ macro_rules! failure {
 }
 
 use crate::{
-    csi::*,
     dev::Device,
     findmnt,
     mount::{self},
 };
 
 pub async fn publish_block_volume(
-    msg: &NodePublishVolumeRequest,
+    target_path: &str,
+    volume_id: &str,
+    uri: &str,
+    readonly: bool,
 ) -> Result<(), Status> {
-    let target_path = &msg.target_path;
-    let volume_id = &msg.volume_id;
-
-    let uri = msg.publish_context.get("uri").ok_or_else(|| {
-            failure!(
-                Code::InvalidArgument,
-                "Failed to stage volume {}: URI attribute missing from publish context",
-                volume_id
-            )
-        })?;
-
     // Block volumes are not staged, instead
     // bind mount to the device path,
     // this can be done for mutliple target paths.
@@ -97,11 +88,9 @@ pub async fn publish_block_volume(
             std::fs::File::create(&target_path)?;
         }
 
-        if let Err(error) = mount::blockdevice_mount(
-            &device_path,
-            target_path.as_str(),
-            msg.readonly,
-        ) {
+        if let Err(error) =
+            mount::blockdevice_mount(&device_path, target_path, readonly)
+        {
             return Err(failure!(
                 Code::Internal,
                 "Failed to publish volume {}: {}",
@@ -121,11 +110,9 @@ pub async fn publish_block_volume(
 }
 
 pub fn unpublish_block_volume(
-    msg: &NodeUnpublishVolumeRequest,
+    volume_id: &str,
+    target_path: &str,
 ) -> Result<(), Status> {
-    let target_path = &msg.target_path;
-    let volume_id = &msg.volume_id;
-
     // block volumes are mounted on block special file, which is not
     // a regular file.
     if mount::find_mount(None, Some(target_path)).is_some() {

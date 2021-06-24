@@ -1,6 +1,6 @@
 //! Utility functions for mounting and unmounting filesystems.
 
-use std::{collections::HashSet, io::Error};
+use std::io::Error;
 
 use proc_mounts::MountIter;
 use sys_mount::{unmount, FilesystemType, Mount, MountFlags, UnmountFlags};
@@ -72,24 +72,6 @@ pub fn find_mount(
     }
 
     found.map(MountInfo::from)
-}
-
-/// Check if options in "first" are also present in "second",
-/// but exclude values "ro" and "rw" from the comparison.
-pub(super) fn subset(first: &[String], second: &[String]) -> bool {
-    let set: HashSet<&String> = second.iter().collect();
-    for entry in first {
-        if entry == "ro" {
-            continue;
-        }
-        if entry == "rw" {
-            continue;
-        }
-        if set.get(entry).is_none() {
-            return false;
-        }
-    }
-    true
 }
 
 /// Return supported filesystems.
@@ -188,78 +170,6 @@ pub fn filesystem_unmount(target: &str) -> Result<(), Error> {
     unmount(target, flags)?;
 
     debug!("Target {} unmounted", target);
-
-    Ok(())
-}
-
-/// Bind mount a source path to a target path.
-/// Supports both directories and files.
-pub fn bind_mount(
-    source: &str,
-    target: &str,
-    file: bool,
-) -> Result<Mount, Error> {
-    let mut flags = MountFlags::empty();
-
-    flags.insert(MountFlags::BIND);
-
-    if file {
-        flags.insert(MountFlags::RDONLY);
-    }
-
-    let mount = Mount::new(
-        source,
-        target,
-        FilesystemType::Manual("none"),
-        flags,
-        None,
-    )?;
-
-    debug!("Source {} bind mounted onto target {}", source, target);
-
-    Ok(mount)
-}
-
-/// Bind remount a path to modify mount options.
-/// Assumes that target has already been bind mounted.
-pub fn bind_remount(target: &str, options: &[String]) -> Result<Mount, Error> {
-    let mut flags = MountFlags::empty();
-
-    let (readonly, value) = parse(options);
-
-    flags.insert(MountFlags::BIND);
-
-    if readonly {
-        flags.insert(MountFlags::RDONLY);
-    }
-
-    flags.insert(MountFlags::REMOUNT);
-
-    let mount = Mount::new(
-        "none",
-        target,
-        FilesystemType::Manual("none"),
-        flags,
-        option(&value),
-    )?;
-
-    debug!(
-        "Target {} bind remounted (options: {})",
-        target,
-        show(options)
-    );
-
-    Ok(mount)
-}
-
-/// Unmounts a path that has previously been bind mounted.
-/// Should not be used for unmounting devices.
-pub fn bind_unmount(target: &str) -> Result<(), Error> {
-    let flags = UnmountFlags::empty();
-
-    unmount(target, flags)?;
-
-    debug!("Target {} bind unmounted", target);
 
     Ok(())
 }

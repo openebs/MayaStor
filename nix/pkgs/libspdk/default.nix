@@ -68,6 +68,7 @@ let
       ncurses
       numactl
       openssl
+      (python3.withPackages (ps: with ps; [ pyelftools ]))
       libpcap
       libbsd
       jansson

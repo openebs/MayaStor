@@ -434,6 +434,12 @@ pub struct IscsiTgtOpts {
     max_large_data_in_per_connection: u32,
     /// todo
     max_r2t_per_connection: u32,
+    /// todo
+    pdu_pool_size: u32,
+    /// todo
+    immediate_data_pool_size: u32,
+    /// todo
+    data_out_pool_size: u32,
 }
 
 impl Default for IscsiTgtOpts {
@@ -459,6 +465,12 @@ impl Default for IscsiTgtOpts {
             allow_duplicate_isid: false,
             max_large_data_in_per_connection: 64,
             max_r2t_per_connection: 4,
+            // 2 * (MaxQueueDepth + MaxLargeDataInPerConnection + 2 *
+            // MaxR2TPerConnection + 8)
+            pdu_pool_size: 110 * (2 * (32 + 64 + 2 * 4 + 8)),
+            immediate_data_pool_size: 110 * 128,
+            // MaxSessions * MAX_DATA_OUT_PER_CONNECTION
+            data_out_pool_size: 110 * 16,
         }
     }
 }
@@ -490,6 +502,9 @@ impl From<&IscsiTgtOpts> for spdk_iscsi_opts {
             AllowDuplicateIsid: o.allow_duplicate_isid,
             MaxLargeDataInPerConnection: o.max_large_data_in_per_connection,
             MaxR2TPerConnection: o.max_r2t_per_connection,
+            pdu_pool_size: o.pdu_pool_size,
+            immediate_data_pool_size: o.immediate_data_pool_size,
+            data_out_pool_size: o.data_out_pool_size,
         }
     }
 }

@@ -37,7 +37,7 @@ async def run_cmd_async(cmd):
 
 async def run_cmd_async_at(host, cmd):
     """Runs the command async at the given host."""
-    async with asyncssh.connect(host, known_hosts=None) as conn:
+    async with asyncssh.connect(host, known_hosts=None, password='') as conn:
         result = await conn.run(cmd, check=False)
 
         output_message = f"Command: {host}:{cmd}\n"

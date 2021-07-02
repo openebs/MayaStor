@@ -3,6 +3,7 @@ from common.fio import Fio
 from common.fio_spdk import FioSpdk
 from common.volume import Volume
 from common.hdl import MayastorHandle
+from common.mayastor import target_vm, containers_mod as containers
 import logging
 import pytest
 import uuid as guid
@@ -133,7 +134,7 @@ async def kill_after(container, sec):
     container.kill()
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 @pytest.mark.asyncio
 @pytest.mark.timeout(60)
 async def test_nexus_2_mirror_kill_one(containers, create_nexus):
@@ -199,6 +200,7 @@ async def test_nexus_2_remote_mirror_kill_one(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip
 @pytest.mark.timeout(60)
 async def test_nexus_2_remote_mirror_kill_one_spdk(
     containers_mod, nexus_uuid, mayastor_mod, create_nexus

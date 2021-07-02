@@ -28,15 +28,14 @@
     cores = 2;
   };
 
-  users.users.root.openssh.authorizedKeys.keys = [ (builtins.readFile /etc/ssh/authorized_keys.d/root) ];
   users.users.root.password = "nixos";
 
   time.timeZone = "UTC";
 
-  users.users.mayastor = {
+  users.users.jenkins = {
     isNormalUser = true;
     extraGroups = [ "wheel"  ];
-    openssh.authorizedKeys.keys = [ (builtins.readFile /etc/ssh/authorized_keys.d/root) ];
+    password = "";
   };
 
   networking.networkmanager.enable = false;

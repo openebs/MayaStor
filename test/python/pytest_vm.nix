@@ -32,9 +32,11 @@
 
   time.timeZone = "UTC";
 
+  security.sudo.wheelNeedsPassword = false;
+
   users.users.jenkins = {
     isNormalUser = true;
-    extraGroups = [ "wheel"  ];
+    extraGroups = [ "wheel" ];
     password = "";
   };
 
